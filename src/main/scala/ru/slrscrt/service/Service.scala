@@ -9,6 +9,8 @@ import scala.concurrent.Future
 import scala.util.{Success, Try}
 
 /**
+  * Базовый класс для сервисов
+  *
   * @author Roman Maksyutov
   */
 trait Service extends SettingsSupport with ExecutionContextSupport with Logging {

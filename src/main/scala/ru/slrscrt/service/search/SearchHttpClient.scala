@@ -41,7 +41,8 @@ class SearchHttpClient(implicit val system: ActorSystem) extends JsonSupport
         Http().cachedHostConnectionPool[String](host, port)
     }
 
-  type Response = Map[String, TagStatisticInfo]
+  type TagStatisticMap = Map[String, TagStatisticInfo]
+  type ToStatisticInfo = (String, TagItems) => (String, TagStatisticInfo)
 
 
   private def encode(p: String): String = URLEncoder.encode(p, StandardCharsets.UTF_8.name)
@@ -53,7 +54,7 @@ class SearchHttpClient(implicit val system: ActorSystem) extends JsonSupport
   }
 
 
-  private def createRequest(tag: String): Future[(HttpRequest, String)] = {
+  private def mkHttpRequest(tag: String): Future[(HttpRequest, String)] = {
     val uri = RequestUrl + encode(tag)
     Future.successful(HttpRequest(HttpMethods.GET, uri) -> tag)
   }
@@ -61,12 +62,22 @@ class SearchHttpClient(implicit val system: ActorSystem) extends JsonSupport
   private val parallelism: Int = settings.search.parallelism
 
 
-  def request(tags: Set[String]): Future[Response] = {
-    Source(tags).mapAsync(parallelism.min(tags.size))(createRequest)
+  /**
+    * Выполнение HTTP запросов для получения информации по тэгам. Для каждого тэга создается отдельный запрос
+    *
+    * @param tags тэги для которых необходимо выполнить запросы
+    * @param f    ф-ия конвертации исходной информации по тэгу в статистику, т.е. пар: (tag -> TagItems) => (tag -> TagStatisticInfo)
+    * @return
+    */
+  def executeSearchRequests(tags: Set[String])(implicit f: ToStatisticInfo): Future[TagStatisticMap] = {
+    Source(tags).mapAsync(parallelism.min(tags.size))(mkHttpRequest)
   }
 
 
-  implicit private def withSource: Source[(HttpRequest, String), NotUsed] => Future[Response] = {
+  /**
+    * Выполнение и обработка HTTP запросов
+    */
+  implicit private def withSource(src: Source[(HttpRequest, String), NotUsed])(implicit f: ToStatisticInfo): Future[TagStatisticMap] = {
 
     def decode(response: HttpResponse): HttpEntity = {
       (response.encoding match {
@@ -79,20 +90,14 @@ class SearchHttpClient(implicit val system: ActorSystem) extends JsonSupport
       }).decodeMessage(response).entity
     }
 
-    _.log("Search Request").via(connectionPoolFlow).log("Search Response").runFoldAsync(Map[String, TagStatisticInfo]()) {
+    src.log("Search Request").via(connectionPoolFlow).log("Search Response").runFoldAsync(Map[String, TagStatisticInfo]()) {
 
       case (map, (Success(resp@(HttpResponse(StatusCodes.OK, _, _, _))), tag)) =>
 
         val entity: HttpEntity = decode(resp)
         Unmarshal(entity).to[TagItems] transformWith {
           case Success(result) =>
-            //TODO Возможно не совсем верно понял, как подсчитывать статистику
-            // и с точки зрения производительности оптимальнее сделать foldLeft, но так более читабельно
-            val total = result.items.filter(_.tags.contains(tag))
-            val answered = total.count(_.is_answered)
-
-            FastFuture.successful(map + (tag -> TagStatisticInfo(total.size, answered)))
-
+            FastFuture.successful(map + f(tag, result))
 
           case Failure(e) =>
             Unmarshal(entity).to[SearchTagError] map { error =>

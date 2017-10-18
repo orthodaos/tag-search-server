@@ -4,6 +4,8 @@ import akka.actor.{ActorContext, ExtendedActorSystem, Extension, ExtensionId, Ex
 import ru.slrscrt.service.search.SearchService
 
 /**
+  * Набор используемых в приложении сервисов
+  *
   * @author Roman Maksyutov
   */
 class Services private(implicit extendedSystem: ExtendedActorSystem) extends Extension {

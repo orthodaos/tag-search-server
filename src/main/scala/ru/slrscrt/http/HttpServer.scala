@@ -27,6 +27,9 @@ class HttpServer(implicit val system: ActorSystem, startAt: Long)
 
   import settings.materializer
 
+  /**
+    * Старт HTTP сервера
+    */
   def startServer() {
 
     import settings.http._
